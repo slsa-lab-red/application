@@ -15,6 +15,8 @@ spec:
       labels:
         app: slsa-simulation-app
     spec:
+      imagePullSecrets:
+        - name: ghcr-secret
       containers:
       - name: web
         image: ghcr.io/slsa-lab-red/application:1
