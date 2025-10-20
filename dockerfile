@@ -1,3 +1,6 @@
+FROM nginx:alpine
+
+ARG TEAM="slsa-lab-red"
 ARG COLOR="#D32F2F"
 
 LABEL maintainer="slsa-lab@example.com"
