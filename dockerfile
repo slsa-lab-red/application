@@ -1,7 +1,4 @@
-FROM nginx:alpine
-
-ARG TEAM="TEAM"
-ARG COLOR="#333333"
+ARG COLOR="#D32F2F"
 
 LABEL maintainer="slsa-lab@example.com"
 LABEL team=${TEAM}
