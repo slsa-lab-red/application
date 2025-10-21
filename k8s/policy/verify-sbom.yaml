@@ -28,11 +28,13 @@ spec:
     verifyImages:
     - imageReferences:
       - "ghcr.io/slsa-lab-red/*"
-      
       attestors:
       - entries:
         - keyless:
+            issuer: "https://token.actions.githubusercontent.com"
             subject: "https://github.com/slsa-lab-red/application/.github/workflows/*"
-            issuer: "https://token.actions.githubusercontent.com" 
             rekor:
               url: https://rekor.sigstore.dev
+      
+      mutateDigest: true
+      required: true
