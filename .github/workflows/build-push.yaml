@@ -31,6 +31,7 @@ jobs:
 
       - name: Build and push image
         uses: docker/build-push-action@v4
+        id: push
         with:
           context: .
           push: true
@@ -40,6 +41,8 @@ jobs:
           build-args: |
             TEAM=${{ github.repository_owner }}
             COLOR=${{ secrets.TEAM_COLOR }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
             
       - name: Run Trivy vulnerability scan
         uses: aquasecurity/trivy-action@0.30.0
