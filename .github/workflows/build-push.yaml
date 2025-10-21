@@ -45,7 +45,7 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          sed -i "s|image: .*|image: ${{ env.IMAGE }}:${{ github.run_number }}|" k8s/deployment.yaml || true
-          git add k8s/deployment.yaml || true
-          git commit -m "ci: update image to ${{ github.run_number }}" || true
-          git push || true
+          sed -i "s|image: .*|image: ${{ env.IMAGE }}:sha-${{ github.sha }}|" k8s/deployment.yaml
+          git add k8s/deployment.yaml
+          git commit -m "ci: update verified image to sha-${{ github.sha }}"
+          git push
