@@ -35,11 +35,19 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.run_number }}
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
           build-args: |
             TEAM=${{ github.repository_owner }}
             COLOR=${{ secrets.TEAM_COLOR }}
+            
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          image-ref: '${{ env.IMAGE }}@${{ steps.push.outputs.digest }}'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: 1
 
       - name: Update k8s manifest with new image tag
         run: |
