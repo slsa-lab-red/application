@@ -1,0 +1,68 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-run-as-nonroot
+
+spec:
+  validationFailureAction: Enforce
+  failurePolicy: Fail
+  
+  rules:
+  - name: run-as-non-root-and-security-hardening
+    match:
+      any:
+      - resources:
+          kinds:
+          - Deployment
+    
+    exclude:
+      any:
+      - resources:
+          namespaces:
+          - kube-system
+          - kube-public
+          - kube-node-lease
+          - kyverno
+    
+    validate:
+      message: >-
+        root 실행, 특권 모드, 권한 상승 금지
+      anyPattern:
+      - spec:
+          template:
+            spec:
+              securityContext:
+                runAsNonRoot: "true"
+              containers:
+              - securityContext:
+                  runAsNonRoot: "true"
+                  privileged: "false"
+                  allowPrivilegeEscalation: false
+              =(initContainers):
+              - securityContext:
+                  runAsNonRoot: "true"
+                  privileged: "false"
+                  allowPrivilegeEscalation: false
+              =(ephemeralContainers):
+              - securityContext:
+                  runAsNonRoot: "true"
+                  privileged: "false"
+                  allowPrivilegeEscalation: false
+      - spec:
+          template:
+            spec:
+              containers:
+              - securityContext:
+                  runAsNonRoot: "true"
+                  privileged: "false"
+                  allowPrivilegeEscalation: false
+              =(initContainers):
+              - securityContext:
+                  runAsNonRoot: "true"
+                  privileged: "false"
+                  allowPrivilegeEscalation: false
+              =(ephemeralContainers):
+              - securityContext:
+                  runAsNonRoot: "true"
+                  privileged: "false"
+                  allowPrivilegeEscalation: false

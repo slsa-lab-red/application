@@ -1,0 +1,38 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-image-signature
+
+spec:
+  validationFailureAction: Enforce
+  failurePolicy: Fail
+  
+  rules:
+  - name: check-image-signature
+    
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+    
+    exclude:
+      any:
+      - resources:
+          namespaces:
+          - kube-system
+          - kube-public
+          - kube-node-lease
+          - kyverno
+    
+    verifyImages:
+    - imageReferences:
+      - "ghcr.io/slsa-lab-red/*"
+      
+      attestors:
+      - entries:
+        - keyless:
+            subject: "https://github.com/slsa-lab-red/application/.github/workflows/*"
+            issuer: "https://token.actions.githubusercontent.com" 
+            rekor:
+              url: https://rekor.sigstore.dev
