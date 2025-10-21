@@ -6,6 +6,9 @@ ARG COLOR="#D32F2F"
 LABEL maintainer="slsa-lab@example.com"
 LABEL team=${TEAM}
 
+# Update packages to fix CVE-2025-58050
+RUN apk update && apk upgrade pcre2 && rm -rf /var/cache/apk/*
+
 RUN mkdir -p /usr/share/nginx/html
 RUN printf '\
 <!doctype html>\n\
