@@ -1,0 +1,66 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+
+spec:
+  validationFailureAction: Enforce
+  failurePolicy: Fail
+  
+  rules:
+  - name: require-image-tag
+    match:
+      resources:
+        kinds:
+        - Deployment
+    
+    exclude:
+      any:
+      - resources:
+          namespaces:
+          - kube-system
+          - kube-public
+          - kube-node-lease
+          - kyverno
+    
+    validate:
+      message: "이미지 태그를 명시해야 하며, 'latest' 태그는 사용할 수 없습니다."
+      foreach:
+      - list: "request.object.spec.template.spec.containers"
+        pattern:
+          image: "!*:latest"
+      - list: "request.object.spec.template.spec.initContainers"
+        pattern:
+          image: "!*:latest"
+      - list: "request.object.spec.template.spec.ephemeralContainers"
+        pattern:
+          image: "!*:latest"
+  
+  - name: require-image-tag-exists
+    match:
+      any:
+      - resources:
+          kinds:
+          - Deployment
+    
+    exclude:
+      any:
+      - resources:
+          namespaces:
+          - kube-system
+          - kube-public
+          - kube-node-lease
+          - kyverno
+    
+    validate:
+      message: "이미지에는 태그 또는 digest가 반드시 포함되어야 합니다."
+      foreach:
+      - list: "request.object.spec.template.spec.containers"
+        pattern:
+          image: "*:*|*@*"
+      - list: "request.object.spec.template.spec.initContainers"
+        pattern:
+          image: "*:*|*@*"
+      - list: "request.object.spec.template.spec.ephemeralContainers"
+        pattern:
+          image: "*:*|*@*"
