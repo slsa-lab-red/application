@@ -5,6 +5,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write  # OIDC 토큰 권한 추가
+  packages: write
 
 jobs:
   build-and-push:
