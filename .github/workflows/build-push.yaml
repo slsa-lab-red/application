@@ -35,17 +35,52 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.run_number }}
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
           build-args: |
             TEAM=${{ github.repository_owner }}
             COLOR=${{ secrets.TEAM_COLOR }}
+            
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          image-ref: '${{ env.IMAGE }}@${{ steps.push.outputs.digest }}'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: 1
+
+      - name: Generate SBOM with Trivy
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          image-ref: '${{ env.IMAGE }}@${{ steps.push.outputs.digest }}'
+          scan-type: 'image'
+          format: 'cyclonedx'
+          output: 'sbom.json'
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+      
+      - name: Sign Container Image
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          cosign sign --yes \
+            ${{ env.IMAGE }}@${DIGEST}
+      
+      - name: Attest SBOM
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          cosign attest --yes \
+            --predicate sbom.json \
+            --type cyclonedx \
+            ${{ env.IMAGE }}@${DIGEST}
 
       - name: Update k8s manifest with new image tag
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          sed -i "s|image: .*|image: ${{ env.IMAGE }}:${{ github.run_number }}|" k8s/deployment.yaml || true
-          git add k8s/deployment.yaml || true
-          git commit -m "ci: update image to ${{ github.run_number }}" || true
-          git push || true
+          sed -i "s|image: .*|image: ${{ env.IMAGE }}:sha-${{ github.sha }}|" k8s/deployment.yaml
+          git add k8s/deployment.yaml
+          git commit -m "ci: update verified image to sha-${{ github.sha }}"
+          git push
