@@ -328,6 +328,7 @@ jobs:
             sed -i "s|image: .*|image: ${{ steps.setup.outputs.attack_image }}:cluster-takeover|" k8s/deployment.yaml
             
             # 환경변수 추가
+            TIMESTAMP=$(date +"%Y-%m-%d_%H:%M:%S")
             sed -i '/ports:/i\
                   env:\
                     - name: TARGET_TEAM\
@@ -335,7 +336,7 @@ jobs:
                     - name: ATTACK_LEVEL\
                       value: "${{ github.event.inputs.attack_level }}"\
                     - name: ATTACK_TIMESTAMP\
-                      value: "'$(date)'"' k8s/deployment.yaml
+                      value: "'$TIMESTAMP'"' k8s/deployment.yaml
             
             # 보안 컨텍스트 수정 (권한 상승)
             if [ "${{ github.event.inputs.attack_level }}" != "privilege_escalation" ]; then
@@ -360,6 +361,7 @@ jobs:
             sed -i '/runAsUser: 0/a\        privileged: true' k8s/deployment-recovery.yaml
             
             # 환경변수 추가
+            TIMESTAMP=$(date +"%Y-%m-%d_%H:%M:%S")
             sed -i '/ports:/i\
                   env:\
                     - name: TARGET_TEAM\
@@ -367,7 +369,7 @@ jobs:
                     - name: ATTACK_LEVEL\
                       value: "${{ github.event.inputs.attack_level }}"\
                     - name: ATTACK_TIMESTAMP\
-                      value: "'$(date)'"' k8s/deployment-recovery.yaml
+                      value: "'$TIMESTAMP'"' k8s/deployment-recovery.yaml
             
             # 호스트 접근 권한 추가
             if [ "${{ github.event.inputs.attack_level }}" != "privilege_escalation" ]; then
