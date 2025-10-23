@@ -16,3 +16,8 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
+    - ApplyOutOfSyncOnly=true
+  # 제한된 ServiceAccount 사용
+  serviceAccount: argocd-restricted-controller
