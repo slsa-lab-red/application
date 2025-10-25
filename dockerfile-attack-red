@@ -10,8 +10,35 @@ RUN apk update && apk upgrade --no-cache
 
 RUN mkdir -p /usr/share/nginx/html
 
-COPY green.html /usr/share/nginx/html/index.html
+RUN printf '\
+<!doctype html>\n\
+<html lang="en">\n\
+<head>\n\
+  <meta charset="utf-8"/>\n\
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>\n\
+  <title>slsa-lab-green</title>\n\
+  <style>\n\
+    html,body { height:100%%; margin:0; }\n\
+    body {\n\
+      background: #2E7D32;\n\
+      display:flex; align-items:center; justify-content:center;\n\
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial;\n\
+    }\n\
+    h1 {\n\
+      color: white;\n\
+      font-size: 8vw;\n\
+      text-shadow: 0 2px 6px rgba(0,0,0,0.4);\n\
+      margin:0; padding: 10px 20px; border-radius: 8px; background: rgba(0,0,0,0.12);\n\
+    }\n\
+    @media (min-width:700px) { h1 { font-size: 64px; } }\n\
+  </style>\n\
+</head>\n\
+<body>\n\
+  <h1>slsa-lab-green</h1>\n\
+</body>\n\
+</html>\n' > /usr/share/nginx/html/index.html
 
+# Nginx 기본 포트 변경
 RUN sed -i 's/listen\s\+80;/listen 8080;/g' /etc/nginx/conf.d/default.conf
 
 EXPOSE 8080
